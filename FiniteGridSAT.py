@@ -1,11 +1,11 @@
 from ortools.sat.python import cp_model
 
 # --- CONFIGURATION ---
-GRID_SIZE = 8  # Reduced for faster testing (Change back to 50 if desired)
-MAX_MAX_COL_NUMBER=30
+GRID_SIZE = 9  # Reduced for faster testing (Change back to 50 if desired)
+MAX_MAX_COL_NUMBER=37
 
 N = GRID_SIZE
-MIN_COL_NUMBER =22
+MIN_COL_NUMBER =28
 
 def solve_finite_grid(MAX_COL_NUMBER):
     model = cp_model.CpModel()
