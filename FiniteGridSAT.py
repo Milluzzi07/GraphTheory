@@ -22,7 +22,7 @@ def solve_finite_grid(MAX_COL_NUMBER):
     # ---------------------------------------------------------
     # A. PACKING CONSTRAINTS (Finite Exclusion Zone)
     # ---------------------------------------------------------
-    print("  > Building Packing Constraints (Manhattan Exclusion)...")
+    print("  > Building Packing Constraints...")
     for z in range(1, MAX_COL_NUMBER + 1):
         # Progress update every 10 colors to show activity
         if z % 10 == 0 or z == MAX_COL_NUMBER:
