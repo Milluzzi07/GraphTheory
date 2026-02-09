@@ -1,10 +1,10 @@
 from ortools.sat.python import cp_model
-
+import time
 # --- CONFIGURATION ---
-MIN_WIDTH = 12        # Start checking at this width
+MIN_WIDTH = 45        # Start checking at this width
 MAX_WIDTH = 128        # End checking at this width (inclusive)
-MAX_COLOR = 11        # The available palette 
-HEIGHT = 2            # Fixed height for the ladder
+MAX_COLOR = 49       # The available palette 
+HEIGHT = 4            # Fixed height for the ladder
 
 def solve_ladder_cylinder(width, max_color):
     """
@@ -12,7 +12,7 @@ def solve_ladder_cylinder(width, max_color):
     Topology: Cylinder (Wraps horizontally, hard edges vertically).
     """
     model = cp_model.CpModel()
-    
+    start_time= time.time()
     # 1. CREATE VARIABLES
     grid = {}
     for r in range(HEIGHT):
@@ -74,11 +74,14 @@ def solve_ladder_cylinder(width, max_color):
             for i in range(len(neighbors)):
                 for j in range(i + 1, len(neighbors)):
                     model.Add(2 * current != neighbors[i] + neighbors[j])
-
+    elapsed=time.time()-start_time
+    print(elapsed)
     # 3. SOLVE
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 30.0 
-    
+    solver.parameters.max_time_in_seconds = 180.0 
+    solver.parameters.num_search_workers = 0 
+    solver.parameters.random_seed = 42
+    solver.parameters.log_search_progress = False
     status = solver.Solve(model)
 
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:

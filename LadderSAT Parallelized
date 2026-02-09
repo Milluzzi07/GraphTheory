@@ -1,0 +1,186 @@
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
+from ortools.sat.python import cp_model
+import time
+
+# --- CONFIGURATION ---
+MIN_WIDTH = 45
+MAX_WIDTH = 128
+MAX_COLOR = 49
+HEIGHT = 4
+
+def get_flat_idx(r, c, width):
+    return r * width + c
+
+# --- WORKER FUNCTION ---
+def generate_constraints_for_chunk(chunk_rows, width, HEIGHT, max_color):
+    """
+    Generates constraints for a specific set of rows.
+    Returns lists of:
+      1. Exclusion pairs: (idx1, idx2, [forbidden_values])
+      2. Adjacency pairs: (idx1, idx2) -> implies !=, no doubles
+      3. Arithmetic triplets: (idx_curr, idx_n1, idx_n2)
+    """
+    exclusion_packets = []
+    adjacency_packets = []
+    arithmetic_packets = []
+
+    # Pre-calculate exclusion distances to save time in loops
+    # map: z -> exclusion_distance
+    z_dist_map = {z: (2 if z == 1 else z) for z in range(1, max_color + 1)}
+
+    for r in chunk_rows:
+        for c in range(width):
+            curr_idx = get_flat_idx(r, c, width)
+            
+            # --- 1. EXCLUSION ZONE (The Heavy Lifter) ---
+            # We scan the "neighborhood" of this cell.
+            # Optimization: We limit the scan to the max possible exclusion distance
+            # but we ONLY yield if neighbor_idx > curr_idx to avoid duplicates.
+            max_dist = max_color # Worst case
+            
+            # We scan a square area relative to current cell
+            # This is raw geometric logic, not solver logic.
+            for dy in range(-max_dist, max_dist + 1):
+                for dx in range(-max_dist, max_dist + 1):
+                    if dy == 0 and dx == 0: continue
+                    
+                    dist = abs(dy) + abs(dx)
+                    if dist > max_dist: continue
+
+                    # Cylinder Wrap Logic
+                    nr, nc = r + dy, (c + dx) % width
+                    
+                    # Vertical Hard Edge Check
+                    if not (0 <= nr < HEIGHT): continue
+                    
+                    n_idx = get_flat_idx(nr, nc, width)
+                    
+                    # DEDUPLICATION: Only process if neighbor is "ahead" in index
+                    # This cuts work in half and prevents double-constraints.
+                    if n_idx <= curr_idx: continue
+
+                    # Find which colors are forbidden for this specific distance
+                    # A color 'z' is forbidden if its required buffer >= current distance
+                    forbidden_z = [z for z, req_dist in z_dist_map.items() if req_dist >= dist]
+                    
+                    if forbidden_z:
+                        exclusion_packets.append((curr_idx, n_idx, forbidden_z))
+
+            # --- 2. ADJACENCY & ARITHMETIC ---
+            # Standard immediate neighbors (Up, Down, Left, Right)
+            potential_offsets = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+            immediate_neighbors = []
+            
+            for dy, dx in potential_offsets:
+                nr, nc = r + dy, (c + dx) % width
+                if 0 <= nr < HEIGHT:
+                    immediate_neighbors.append(get_flat_idx(nr, nc, width))
+
+            for n_idx in immediate_neighbors:
+                # Deduplication for Adjacency (A != B, etc)
+                if n_idx > curr_idx:
+                    adjacency_packets.append((curr_idx, n_idx))
+            
+            # Arithmetic (2*A != B + C)
+            # We need all pairs of neighbors for the current cell
+            for i in range(len(immediate_neighbors)):
+                for j in range(i + 1, len(immediate_neighbors)):
+                    n1 = immediate_neighbors[i]
+                    n2 = immediate_neighbors[j]
+                    # No deduplication needed here because 'current' is the pivot
+                    arithmetic_packets.append((curr_idx, n1, n2))
+
+    return (exclusion_packets, adjacency_packets, arithmetic_packets)
+
+def solve_ladder_cylinder_parallel(width, max_color):
+    model = cp_model.CpModel()
+    start_time = time.time()
+
+    # 1. CREATE VARIABLES (Main Thread)
+    # Using a flat list for faster indexing by workers
+    flat_vars = []
+    for r in range(HEIGHT):
+        for c in range(width):
+            flat_vars.append(model.NewIntVar(1, max_color, f'c_{r}_{c}'))
+    
+    # Grid wrapper for final output
+    grid = {}
+    for r in range(HEIGHT):
+        for c in range(width):
+            grid[r, c] = flat_vars[get_flat_idx(r, c, width)]
+
+    # 2. PARALLEL GENERATION
+    # Split rows among workers
+    num_cores = multiprocessing.cpu_count()
+    rows = list(range(HEIGHT))
+    # Simple chunking
+    chunk_size = max(1, len(rows) // num_cores)
+    row_chunks = [rows[i:i + chunk_size] for i in range(0, len(rows), chunk_size)]
+    
+    print(f"Generating constraints on {num_cores} cores...", end=" ")
+    
+    with ProcessPoolExecutor() as executor:
+        futures = [executor.submit(generate_constraints_for_chunk, chunk, width, HEIGHT, max_color) 
+                   for chunk in row_chunks]
+        
+        for future in futures:
+            ex_pack, adj_pack, arith_pack = future.result()
+            
+            # 3. APPLY CONSTRAINTS (Main Thread)
+            
+            # A. Exclusion (Forbidden Assignments)
+            # This is MUCh faster than "OnlyEnforceIf"
+            for idx1, idx2, bad_z in ex_pack:
+                # We forbid the pair (z, z) for all z in bad_z
+                forbidden_tuples = [(z, z) for z in bad_z]
+                model.AddForbiddenAssignments([flat_vars[idx1], flat_vars[idx2]], forbidden_tuples)
+
+            # B. Adjacency
+            for idx1, idx2 in adj_pack:
+                u, v = flat_vars[idx1], flat_vars[idx2]
+                model.Add(u != v)
+                model.Add(u != 2 * v)
+                model.Add(v != 2 * u)
+
+            # C. Arithmetic
+            for idx_c, idx_n1, idx_n2 in arith_pack:
+                current = flat_vars[idx_c]
+                n1 = flat_vars[idx_n1]
+                n2 = flat_vars[idx_n2]
+                # 2*Current != n1 + n2  =>  2*Current - n1 - n2 != 0
+                model.Add(2 * current - n1 - n2 != 0)
+
+    gen_time = time.time() - start_time
+    print(f"Generation done in {gen_time:.2f}s")
+
+    # 4. SOLVE
+    solver = cp_model.CpSolver()
+    solver.parameters.num_search_workers = 0 
+    # solver.parameters.log_search_progress = True 
+    status = solver.Solve(model)
+    
+    return status, solver, grid
+
+def main():
+    print(f"--- STARTING SEARCH ---")
+    print(f"Height: {HEIGHT}")
+    print(f"Width Range: {MIN_WIDTH} - {MAX_WIDTH}")
+    print("-" * 30)
+
+    for w in range(MIN_WIDTH, MAX_WIDTH + 1):
+        print(f"Testing Width {w}...", end=" ", flush=True)
+        result_status, solver, grid = solve_ladder_cylinder_parallel(w, MAX_COLOR)
+        
+        if result_status == cp_model.OPTIMAL or result_status == cp_model.FEASIBLE:
+            print(f"SUCCESS!")
+            # Optional: Print solution
+            # for r in range(HEIGHT):
+            #     print([solver.Value(grid[r, c]) for c in range(w)])
+            break 
+        else:
+            print(f"NO SOLUTION")
+
+if __name__ == "__main__":
+    multiprocessing.freeze_support() # Good practice for Windows
+    main()
