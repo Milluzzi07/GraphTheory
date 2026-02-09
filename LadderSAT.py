@@ -1,10 +1,10 @@
 from ortools.sat.python import cp_model
 
 # --- CONFIGURATION ---
-MIN_WIDTH = 12        # Start checking at this width
-MAX_WIDTH = 128        # End checking at this width (inclusive)
-MAX_COLOR = 11        # The available palette 
-HEIGHT = 2            # Fixed height for the ladder
+MIN_WIDTH = 74        # Start checking at this width
+MAX_WIDTH = 150        # End checking at this width (inclusive)
+MAX_COLOR = 75        # The available palette 
+HEIGHT = 4            # Fixed height for the ladder
 
 def solve_ladder_cylinder(width, max_color):
     """
@@ -77,8 +77,10 @@ def solve_ladder_cylinder(width, max_color):
 
     # 3. SOLVE
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 30.0 
-    
+    solver.parameters.max_time_in_seconds = 45.0 
+    solver.parameters.num_search_workers = 0   # 0 = Use all available CPU cores
+    solver.parameters.random_seed = 42 
+    solver.parameters.log_search_progress = True
     status = solver.Solve(model)
 
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
