@@ -4,9 +4,9 @@ from ortools.sat.python import cp_model
 import time
 
 # --- CONFIGURATION ---
-MIN_WIDTH = 48
-MAX_WIDTH = 128
-MAX_COLOR = 49
+MIN_WIDTH = 200
+MAX_WIDTH = 200
+MAX_COLOR = 50
 HEIGHT = 4
 
 def get_flat_idx(r, c, width):
@@ -156,9 +156,13 @@ def solve_ladder_cylinder_parallel(width, max_color):
 
     # 4. SOLVE
     solver = cp_model.CpSolver()
+    solver.parameters.max_time_in_seconds = 18000.0 
     solver.parameters.num_search_workers = 0 
-    # solver.parameters.log_search_progress = True 
+    solver.parameters.random_seed = 42
+    solver.parameters.log_search_progress = True
+    start_time=time.time()
     status = solver.Solve(model)
+    print(time.time()-start_time)
     
     return status, solver, grid
 

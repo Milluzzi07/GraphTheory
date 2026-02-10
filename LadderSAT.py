@@ -82,7 +82,9 @@ def solve_ladder_cylinder(width, max_color):
     solver.parameters.num_search_workers = 0 
     solver.parameters.random_seed = 42
     solver.parameters.log_search_progress = False
+    start_time=time.time()
     status = solver.Solve(model)
+    print(time.time()-start_time)
 
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
         return "SOLVED", solver, grid
