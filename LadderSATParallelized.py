@@ -4,7 +4,7 @@ from ortools.sat.python import cp_model
 import time
 
 # --- CONFIGURATION ---
-MIN_WIDTH = 45
+MIN_WIDTH = 48
 MAX_WIDTH = 128
 MAX_COLOR = 49
 HEIGHT = 4
