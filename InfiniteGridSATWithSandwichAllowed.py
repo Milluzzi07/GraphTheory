@@ -2,7 +2,7 @@ from ortools.sat.python import cp_model
 import time
 
 # --- CONFIGURATION ---
-GRID_SIZE = 29  # Set to 50 for your full run
+GRID_SIZE = 20  # Set to 50 for your full run
 MAX_COL_NUMBER = GRID_SIZE - 1 
 N = GRID_SIZE
 
@@ -96,11 +96,11 @@ def solve_infinite_optimized():
 
             # Rule 3: Arithmetic Progression Prevention
             # "2 * Current != Neighbor1 + Neighbor2"
-            for i in range(len(neighbors)):
-                for j in range(i + 1, len(neighbors)):
-                    n1 = neighbors[i]
-                    n2 = neighbors[j]
-                    model.Add(2 * current != n1 + n2)
+            # for i in range(len(neighbors)):
+            #     for j in range(i + 1, len(neighbors)):
+            #         n1 = neighbors[i]
+            #         n2 = neighbors[j]
+            #         model.Add(2 * current != n1 + n2)
 
     load_time = time.time() - start_time
     print(f"Constraints loaded in {load_time:.2f} seconds.")
@@ -109,7 +109,7 @@ def solve_infinite_optimized():
     # SOLVE
     # ---------------------------------------------------------
     solver = cp_model.CpSolver()
-    solver.parameters.num_search_workers = 12
+    solver.parameters.num_search_workers = 8
     solver.parameters.max_memory_in_mb = 16000
     solver.parameters.max_time_in_seconds = 28800.0
     solver.parameters.log_search_progress = True
@@ -118,25 +118,10 @@ def solve_infinite_optimized():
     status = solver.Solve(model)
 
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
-        print(f"SUCCESS: Solution Found for {N}x{N} Finite Grid!\n")
-        
+        print(f"SUCCESS: Solution Found for {N}x{N} Toroidal Grid!")
         for r in range(N):
-            row_str = ""
-            
-            # Stagger every other row to create the hexagonal visual offset
-            if r % 2 != 0:
-                row_str += "  " 
-                
-            for c in range(N):
-                val = solver.Value(grid[r, c])
-                # Format each value to occupy 3 characters for clean alignment
-                row_str += f"{val:3} "
-                
-            print(row_str)
-            
-            # Optional: Add a blank line between rows to stretch the vertical aspect ratio
-            # making it look slightly more proportional to a true hexagon
-            print() 
+            row = [solver.Value(grid[r, c]) for c in range(N)]
+            print(row)
     else:
         print("No solution found.")
 
