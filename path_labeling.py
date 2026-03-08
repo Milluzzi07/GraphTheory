@@ -1,139 +1,164 @@
-# brute force path given prohibitted numbers
+# brute force infinite path given prohibitted numbers
 # taking the minimum vertex label available (greedy)
-prohibitted_numbers = [1, 2, 3]
-#prohibitted_numbers = [1, 3, 5, 7, 9]
+# gives only upper bounds
+
+import time  # added for timing
+
+prohibitted_numbers = {1,2,3,4} # can't use these numbers (leave blank to allow all)
+stop_at_vertex = 10000 # if program says can't find a repeat, try increasing this. 
+# a full repetition check for ~10k vertices runs nearly instantly, for ~100k vertices takes a few seconds.
+
+min_repeat_len = 6 # min length of repeated segment
+max_repeat_len = stop_at_vertex // 2 # max length of repeated segment. 
+# useful to cut down computation if we believe repeat len won't be higher than a certain number
+# (will take min of this and path len // 2)
 
 def main():
-    # how many vertices to stop at
-    stop_at_vertex = 800
+    start_time = time.time()  # start timer
 
     give_up = False
 
     path_vertices = [find_valid_start_vertex()]
 
+    # store last appearance index for each vertex
+    last_seen = {path_vertices[0]: 0}
+
+    append_vertex = path_vertices.append
+    pop_vertex = path_vertices.pop
+
     while True:
         added_vertex = 1
+
         while True:
             added_vertex = return_allowed_vertex_num(added_vertex)
 
-            if added_vertex > 40:
-                # its not looking good, give up to prevent infinite loop
+            if added_vertex > 50:
                 give_up = True
                 break
 
-            path_vertices.append(added_vertex)
+            append_vertex(added_vertex)
 
-            if check_if_new_labeling_is_valid(path_vertices):
-                #print('* labeling is valid after adding vertex', added_vertex)
+            if check_if_new_labeling_is_valid(path_vertices, last_seen):
+                last_seen[added_vertex] = len(path_vertices) - 1
                 added_vertex = 1
                 break
             else:
-                #print('*** labeling is not valid after adding vertex', added_vertex)
-                # remove what we added and continue
-                path_vertices = path_vertices[:-1]
+                pop_vertex()
                 added_vertex += 1
                 continue
 
-        # let's look at it after some amount of vertices
         if len(path_vertices) == stop_at_vertex:
             print('stop_at_vertex =', stop_at_vertex)
+            pd_time = time.time()
+            print(f"Path done time: {pd_time - start_time:.2f} seconds")
             break
 
         if give_up:
             print('i >', added_vertex - 1, ', giving up')
             break
 
-    find_immediate_repeat_min_k(path_vertices, k=20)
+    #print(path_vertices) # let's see it
+    print("Max of path:", max(path_vertices))
+    find_immediate_repeat_min_k(path_vertices, k=min_repeat_len, max_L=max_repeat_len)
+
+    end_time = time.time()  # end timer
+    print(f"Total execution time: {end_time - start_time:.2f} seconds")
+
 
 def return_allowed_vertex_num(num):
-    while num in prohibitted_numbers:
+    prohibitted = prohibitted_numbers
+    while num in prohibitted:
         num += 1
     return num
 
 
-# finds the first valid start vertex label in the bottom path sequence
 def find_valid_start_vertex():
-    #print('finding first vertex in path')
     return return_allowed_vertex_num(1)
 
 
-# return False if invalid, True if valid
-# this only checks the new added vertex, not everything
-def check_if_new_labeling_is_valid(path_vertices):
-    # if difference labeling or packing fails with this added vertex, return False
+def check_if_new_labeling_is_valid(path_vertices, last_seen):
     if (
-        # check difference labeling in path
         check_difference_labeling_in_path(path_vertices) == False
-        
-        # check packing in path
-        or check_packing_in_path(path_vertices) == False
+        or check_packing_in_path(path_vertices, last_seen) == False
     ):
         return False
-    
     return True
+
 
 def check_difference_labeling_in_path(path):
     added_vert_index = len(path) - 1
-    added_vert = path[-1]
-    #print(path)
-    previous_vertex = path[-2]
+    added_vert = path[added_vert_index]
+    previous_vertex = path[added_vert_index - 1]
+
     added_edge = abs(added_vert - previous_vertex)
 
-    # check difference labeling in bottom path
     if (
         added_vert == added_edge
         or added_vert == previous_vertex
         or added_edge == previous_vertex
     ):
-        #print('diff labeling in path failed')
         return False
-    if added_vert_index >= 3: # if we have previous edge do the extra check
-        # pp_vertex -- p_edge -- p_vertex -- added_edge -- added_vertex
+
+    if added_vert_index >= 3:
         previous_previous_vertex = path[added_vert_index - 2]
         previous_edge = abs(previous_vertex - previous_previous_vertex)
+
         if added_edge == previous_edge:
-            #print('diff labeling in path failed')
             return False
-        
+
     return True
 
-def check_packing_in_path(path):
+
+def check_packing_in_path(path, last_seen):
     added_vert_index = len(path) - 1
-    added_vert = path[-1]
-    # staircase check for caterpillar
-    # prev_vert = path[added_vert_index - 1]
-    # prohibitted_combos = [[3, 4], [3, 5], [4, 6], [4, 7], [5, 8], [5, 9], [6, 10], [6, 11], [7, 12], [7, 13]]
-    # for combo in prohibitted_combos:
-    #     if [added_vert, prev_vert] == combo or [prev_vert, added_vert] == combo:
-    #         return False
+    added_vert = path[added_vert_index]
 
-    for offset in range(1, added_vert + 1):
-        check_index = added_vert_index - offset
-        if check_index < 0:
-            break # just break
-        if path[check_index] == added_vert:
-            #print(check_index, path[check_index], added_vert, path)
-            #print('packing in top path failed (backwards)')
+    if added_vert in last_seen:
+        if added_vert_index - last_seen[added_vert] <= added_vert:
             return False
-        
+
     return True
 
 
-def find_immediate_repeat_min_k(lst, k=10):
-    print(lst)
-    n = len(lst)
+import numpy as np
 
-    for i in range(n):
-        max_L = (n - i) // 2
-        for L in range(k, max_L + 1):
-            if lst[i:i+L] == lst[i+L:i+2*L]:
-                print("Repeating segment:", lst[i:i+L])
-                print("Length:", L)
-                print("First appears at index:", i)
-                print("Repeats at index:", i + L)
-                print("Max:", max(lst[i:i+L]))
-                return lst[i:i+L], i, i + L
-    
+def find_immediate_repeat_min_k(lst, k=10, max_L=200):
+    arr = np.asarray(lst, dtype=np.int32)
+    n = len(arr)
+
+    max_L = min(max_L, n // 2)
+
+    for L in range(k, max_L + 1):
+    #for L in range(max_L, k-1, -1): # reversed! since we believe the segment that repeats is long
+        
+        if L % 100 == 0:
+            print("L:", L)
+
+        eq = arr[:-L] == arr[L:]
+
+        # find start/end of True runs
+        padded = np.concatenate(([0], eq.view(np.int8), [0]))
+        diff = np.diff(padded)
+
+        starts = np.where(diff == 1)[0]
+        ends = np.where(diff == -1)[0]
+
+        lengths = ends - starts
+
+        valid = np.where(lengths >= L)[0]
+        if len(valid) > 0:
+            start = starts[valid[0]]
+
+            segment = arr[start:start+L]
+
+            print("Repeating segment:", segment.tolist())
+            print("Length:", L)
+            print("First appears at index:", start)
+            print("Repeats at index:", start + L)
+            print("Max:", segment.max())
+
+            return segment.tolist(), start, start + L
+
     print("No immediate repetition of length ≥", k)
     return None, None, None
 
