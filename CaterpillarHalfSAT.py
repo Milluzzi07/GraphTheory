@@ -4,11 +4,13 @@ from ortools.sat.python import cp_model
 import time
 
 # --- CONFIGURATION ---
-MIN_WIDTH: int = 12
-MAX_WIDTH: int = 40
-MAX_COLOR: int = 11
+MIN_WIDTH: int = 7
+MAX_WIDTH: int = 200
+MAX_COLOR: int = 8
 HEIGHT: int = 2
-TIME: int = 180
+TIME_LIMIT: int = 600
+CPU_THREADS_USED: int = 0 #Set to 0 to use all available cores
+MAX_MEMORY_IN_MB: int = 0 #Set to 0 to use all available memory
 
 def get_flat_idx(r, c, width):
     return r * width + c
@@ -35,32 +37,22 @@ def generate_constraints_for_chunk(chunk_rows, width, HEIGHT, max_color):
             curr_idx = get_flat_idx(r, c, width)
             
             # --- 1. EXCLUSION ZONE (The Heavy Lifter) ---
-            # We scan the "neighborhood" of this cell.
-            # Optimization: We limit the scan to the max possible exclusion distance
-            # but we ONLY yield if neighbor_idx > curr_idx to avoid duplicates.
-            max_dist: int = int(max_color) # Worst case
-            
-            # We scan a square area relative to current cell
-            # This is raw geometric logic, not solver logic.
-            for dy in range(-max_dist, max_dist + 1):
-                for dx in range(-max_dist, max_dist + 1):
-                    if dy == 0 and dx == 0: continue
-                    
-                    dist = abs(dy) + abs(dx)
-                    if dist > max_dist: continue
-
-                    # Cylinder Wrap Logic
-                    nr, nc = r + dy, (c + dx) % width
-                    
-                    # Vertical Hard Edge Check
-                    if not (0 <= nr < HEIGHT): continue
-                    
+            for nr in range(HEIGHT):
+                for nc in range(width):
                     n_idx = get_flat_idx(nr, nc, width)
                     
                     # DEDUPLICATION: Only process if neighbor is "ahead" in index
                     # This cuts work in half and prevents double-constraints.
                     if n_idx <= curr_idx: continue
 
+                    # Half-Caterpillar Distance Calculation
+                    # Any path between columns must traverse exactly along the main row (row 0).
+                    # - Distance to get to main path: r
+                    # - Distance along main path: min distance in the cycle length 'width'
+                    # - Distance from main path to destination: nr
+                    dx = min(abs(nc - c), width - abs(nc - c))
+                    dist = r + dx + nr
+                    
                     # Find which colors are forbidden for this specific distance
                     # A color 'z' is forbidden if its required buffer >= current distance
                     forbidden_z = [z for z, req_dist in z_dist_map.items() if req_dist >= dist]
@@ -68,16 +60,26 @@ def generate_constraints_for_chunk(chunk_rows, width, HEIGHT, max_color):
                     if forbidden_z:
                         exclusion_packets.append((curr_idx, n_idx, forbidden_z))
 
+            # Self-interference check: distance to itself after 1 full rotation around the cylinder
+            cycle_dist = width + 2 * r
+            self_forbidden_z = [z for z, req_dist in z_dist_map.items() if req_dist >= cycle_dist]
+            if self_forbidden_z:
+                exclusion_packets.append((curr_idx, curr_idx, self_forbidden_z))
+
             # --- 2. ADJACENCY & ARITHMETIC ---
-            # Standard immediate neighbors (Up, Down, Left, Right)
-            potential_offsets = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+            # Determine immediate neighbors based on half-caterpillar topology
             immediate_neighbors = []
             
-            for dy, dx in potential_offsets:
-                nr, nc = r + dy, (c + dx) % width
-                if 0 <= nr < HEIGHT:
-                    immediate_neighbors.append(get_flat_idx(nr, nc, width))
-
+            if r == 0:
+                # Top row (row 0, which acts as "row 2" in description) connects to horizontally adjacent nodes (cylindrical),
+                # and down to bottom row (row 1)
+                immediate_neighbors.append(get_flat_idx(0, (c - 1) % width, width)) # Left
+                immediate_neighbors.append(get_flat_idx(0, (c + 1) % width, width)) # Right
+                immediate_neighbors.append(get_flat_idx(1, c, width))               # Down
+            elif r == 1:
+                # Bottom row (row 1) only connects up to top row (row 0) 
+                immediate_neighbors.append(get_flat_idx(0, c, width))               # Up
+                
             for n_idx in immediate_neighbors:
                 # Deduplication for Adjacency (A != B, etc)
                 if n_idx > curr_idx:
@@ -94,10 +96,10 @@ def generate_constraints_for_chunk(chunk_rows, width, HEIGHT, max_color):
 
     return (exclusion_packets, adjacency_packets, arithmetic_packets)
 
-def solve_ladder_cylinder_parallel(width, max_color, time_limit):
+def solve_half_caterpillar_sat_parallel(width, max_color, time_limit):
     model = cp_model.CpModel()
     start_time = time.time()
-    max_color= min(max_color, width-1)
+    
     # 1. CREATE VARIABLES (Main Thread)
     # Using a flat list for faster indexing by workers
     flat_vars: list[cp_model.IntVar] = []
@@ -131,7 +133,6 @@ def solve_ladder_cylinder_parallel(width, max_color, time_limit):
             # 3. APPLY CONSTRAINTS (Main Thread)
             
             # A. Exclusion (Forbidden Assignments)
-            # This is MUCh faster than "OnlyEnforceIf"
             for idx1, idx2, bad_z in ex_pack:
                 # We forbid the pair (z, z) for all z in bad_z
                 forbidden_tuples = [(z, z) for z in bad_z]
@@ -158,12 +159,13 @@ def solve_ladder_cylinder_parallel(width, max_color, time_limit):
     # 4. SOLVE
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit
-    solver.parameters.num_search_workers = 0 
+    solver.parameters.num_search_workers = CPU_THREADS_USED 
     solver.parameters.random_seed = 42
     solver.parameters.log_search_progress = False
-    start_time=time.time()
+    solver.parameters.max_memory_in_mb = MAX_MEMORY_IN_MB
+    solve_start_time = time.time()
     status = solver.Solve(model)
-    print(time.time()-start_time)
+    print(f"Solve time: {time.time() - solve_start_time:.2f}s")
     
     return status, solver, grid
 
@@ -175,7 +177,7 @@ def main():
 
     for w in range(MIN_WIDTH, MAX_WIDTH + 1):
         print(f"Testing Width {w}...", end=" ", flush=True)
-        result_status, solver, grid = solve_ladder_cylinder_parallel(w, MAX_COLOR, TIME)
+        result_status, solver, grid = solve_half_caterpillar_sat_parallel(w, MAX_COLOR, TIME_LIMIT)
         
         if result_status == cp_model.OPTIMAL or result_status == cp_model.FEASIBLE:
             print(f"SUCCESS!")

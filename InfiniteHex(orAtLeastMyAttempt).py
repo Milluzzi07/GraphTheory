@@ -4,7 +4,7 @@ from collections import deque
 
 # --- CONFIGURATION ---
 # GRID_SIZE must be even to ensure a valid toroidal wrap for a 3-regular bipartite graph.
-GRID_SIZE = 36  
+GRID_SIZE = 16
 MAX_COL_NUMBER = GRID_SIZE - 1 
 N = GRID_SIZE
 
@@ -107,11 +107,11 @@ def solve_infinite_optimized():
 
             # Rule 3: Arithmetic Progression Prevention
             # "2 * Current != Neighbor1 + Neighbor2"
-            for i in range(len(neighbors)):
-                for j in range(i + 1, len(neighbors)):
-                    n1 = neighbors[i]
-                    n2 = neighbors[j]
-                    model.Add(2 * current != n1 + n2)
+            # for i in range(len(neighbors)):
+            #     for j in range(i + 1, len(neighbors)):
+            #         n1 = neighbors[i]
+            #         n2 = neighbors[j]
+            #         model.Add(2 * current != n1 + n2)
 
     load_time = time.time() - start_time
     print(f"Constraints loaded in {load_time:.2f} seconds.")
@@ -122,8 +122,8 @@ def solve_infinite_optimized():
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = 12
     solver.parameters.max_memory_in_mb = 24000
-    solver.parameters.max_time_in_seconds = 28800.0
-    solver.parameters.log_search_progress = True
+    solver.parameters.max_time_in_seconds = 300.0
+    solver.parameters.log_search_progress = False
 
     print("Solving...")
     status = solver.Solve(model)
