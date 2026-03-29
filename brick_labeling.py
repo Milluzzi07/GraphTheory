@@ -4,7 +4,7 @@ from collections import deque
 
 # --- CONFIGURATION ---
 GRID_SIZE = 24         # Must be a multiple of BRICK_LENGTH
-MAX_COL_NUMBER = 22    # The ceiling for our search # 22 works for 24x24 grid, brick length 6
+MAX_COL_NUMBER = 18    # The ceiling for our search # 18 works for 24x24 grid, brick length 6
 
 BRICK_LENGTH = 6  # (ideally even) length of bricks
 
@@ -16,9 +16,9 @@ STAIRS = True
 IDENTICAL_NEIGHBORS = True 
 
 # SEARCH CONFIG
-NUM_SEARCH_WORKERS = 12
+NUM_SEARCH_WORKERS = 8
 MAX_MEMORY_IN_MB = 4000
-MAX_TIME_IN_MINUTES = 60
+MAX_TIME_IN_MINUTES = 600
 LOG_SEARCH = True
 RANDOM_SEARCH_SEED = 42
 
@@ -59,8 +59,7 @@ def compute_distances_and_edges(N):
                 seen_edges.add(edge)
 
     # 3. Compute Exact Shortest Paths using BFS
-    # Optimization: We only need distances up to MAX_COL_NUMBER // 2 + 1
-    dist_cap = (MAX_COL_NUMBER // 2) + 1
+    dist_cap = MAX_COL_NUMBER
     distances = {}
     for r in range(N):
         for c in range(N):
@@ -85,58 +84,61 @@ def build_model(N):
     adj, edges, distances = compute_distances_and_edges(N)
     
     grid = {}
-    b_is_z = {}
-    # NEW: Variable representing the maximum value used in the entire grid
-    #max_val = model.NewIntVar(1, MAX_COL_NUMBER, 'max_val')
     for r in range(N):
         for c in range(N):
             grid[r, c] = model.NewIntVar(1, MAX_COL_NUMBER, f'grid_{r}_{c}')
-            # Constraint: max_val must be >= every cell in the grid
-            #model.Add(max_val >= grid[r, c])
-            z_vars = []
-            for z in range(1, MAX_COL_NUMBER + 1):
-                b = model.NewBoolVar(f'is_{z}_{r}_{c}')
-                b_is_z[r, c, z] = b
-                z_vars.append(b)
-                model.Add(grid[r, c] == z).OnlyEnforceIf(b)
-            model.AddExactlyOne(z_vars)
 
+    # --- 1. PACKING RESTRICTIONS ---
     if PACKING:
-        print(" > Applying Packing Cliques...")
+        print(" > Applying Packing (Distance = Z)...")
         for z in range(1, MAX_COL_NUMBER + 1):
-            k = max(1, z // 2) # Ensures 01s don't touch
-            if z % 2 == 0:
-                for r in range(N):
-                    for c in range(N):
-                        center = (r, c)
-                        clique = [b_is_z[node[0], node[1], z] for node, dist in distances[center].items() if dist <= k]
-                        if len(clique) > 1: model.AddAtMostOne(clique)
-            else:
-                for u, v in edges:
-                    nodes_in_reach = set()
-                    for node, dist in distances[u].items():
-                        if dist <= k: nodes_in_reach.add(node)
-                    for node, dist in distances[v].items():
-                        if dist <= k: nodes_in_reach.add(node)
-                    clique = [b_is_z[nr, nc, z] for nr, nc in nodes_in_reach]
-                    if len(clique) > 1: model.AddAtMostOne(clique)
+            k = z
+            
+            for u, targets in distances.items():
+                for v, dist in targets.items():
+                    if 0 < dist <= k and u < v:
+                        model.AddForbiddenAssignments([grid[u], grid[v]], [(z, z)])
 
     print(" > Applying Local Rules...")
+    # --- 2. PRE-CALCULATE TABLES ---
+    forbidden_pairs = []
+    for x in range(1, MAX_COL_NUMBER + 1):
+        for y in range(1, MAX_COL_NUMBER + 1):
+            if (IDENTICAL_NEIGHBORS and x == y) or (DOUBLES and (x == 2 * y or y == 2 * x)):
+                forbidden_pairs.append((x, y))
+
+    forbidden_triplets = []
+    if STAIRS:
+        for x in range(1, MAX_COL_NUMBER + 1):
+            for y in range(1, MAX_COL_NUMBER + 1):
+                for z in range(1, MAX_COL_NUMBER + 1):
+                    if 2 * x == y + z:
+                        forbidden_triplets.append((x, y, z))
+
+    # --- 3. APPLY EDGE RULES ---
+    for u, v in edges:
+        model.AddForbiddenAssignments([grid[u], grid[v]], forbidden_pairs)
+
+    # --- 4. APPLY NODE-CENTRIC RULES ---
     for u, u_neighbors in adj.items():
-        curr_val = grid[u]
-        neighbor_vals = [grid[n] for n in u_neighbors]
+        neighbor_nodes = list(u_neighbors)
+        neighbor_vars = [grid[n] for n in u_neighbors]
 
-        for n_val in neighbor_vals:
-            if DOUBLES: model.Add(curr_val != 2 * n_val)
-            if IDENTICAL_NEIGHBORS: model.Add(curr_val != n_val)
+        if STAIRS and len(neighbor_nodes) > 1:
+            for i in range(len(neighbor_nodes)):
+                for j in range(i + 1, len(neighbor_nodes)):
+                    model.AddForbiddenAssignments(
+                        [grid[u], grid[neighbor_nodes[i]], grid[neighbor_nodes[j]]],
+                        forbidden_triplets
+                    )
 
-        if STAIRS:
-            for i in range(len(neighbor_vals)):
-                for j in range(i + 1, len(neighbor_vals)):
-                    model.Add(2 * curr_val != neighbor_vals[i] + neighbor_vals[j])
-                    
-        if SANDWICHES and len(neighbor_vals) > 1:
-            model.AddAllDifferent(neighbor_vals)
+        if SANDWICHES and len(neighbor_vars) > 1:
+            model.AddAllDifferent(neighbor_vars)
+
+    # --- 5. SEARCH STRATEGY ---
+    # This helps the solver decide which cells to fill first
+    all_vars = [grid[r, c] for r in range(N) for c in range(N)]
+    model.AddDecisionStrategy(all_vars, cp_model.CHOOSE_FIRST, cp_model.SELECT_MIN_VALUE)
 
     # OBJECTIVE: Minimize the maximum number used
     #model.Minimize(max_val)
@@ -156,6 +158,16 @@ def solve():
     solver.parameters.max_memory_in_mb = MAX_MEMORY_IN_MB
     solver.parameters.max_time_in_seconds = MAX_TIME_IN_MINUTES * 60.0
     solver.parameters.log_search_progress = LOG_SEARCH
+    
+    # 1. Use a fixed search strategy instead of the default automated portfolio
+    solver.parameters.search_branching = cp_model.FIXED_SEARCH 
+
+    # 2. Increase the level of "presolve" to catch contradictions early
+    solver.parameters.cp_model_presolve = True
+
+    # 3. Tell the solver to stop as soon as it finds the FIRST valid solution
+    # (This is the default for solver.Solve, but this parameter helps the search heuristics)
+    solver.parameters.stop_after_first_solution = True
 
     print("\nSolving...")
     start_time = time.time()
