@@ -3,11 +3,11 @@ import time
 from collections import deque
 
 # --- CONFIGURATION ---
-GRID_SIZE = 16         # Total size of the grid (N x N)
-MAX_COL_NUMBER = 10    # Max value for the variables
+GRID_SIZE = 8         # Total size of the grid (N x N)
+MAX_COL_NUMBER = 7    # Max value for the variables
 
 # --- PUNCH CONFIGURATION ---
-PUNCH_SIZE = 3         # The size of the hole (M x M)
+PUNCH_SIZE = 7         # The size of the hole (M x M)
 GAP_SIZE = 1           # The spacing between holes
 # The pattern will repeat every (PUNCH_SIZE + GAP_SIZE) units.
 
@@ -111,10 +111,11 @@ def build_model(N):
     forbidden_triplets = []
     if STAIRS:
         for x in range(1, MAX_COL_NUMBER + 1):
-            for y in range(1, MAX_COL_NUMBER + 1):
-                for z in range(1, MAX_COL_NUMBER + 1):
-                    if 2 * x == y + z:
-                        forbidden_triplets.append((x, y, z))
+            for y in range(x + 1, MAX_COL_NUMBER + 1):
+                z = 2 * y - x
+                if z <= MAX_COL_NUMBER:
+                    forbidden_triplets.append((x, y, z))
+                    forbidden_triplets.append((z, y, x))
 
     # 3. CONSTRAINTS
     for u, v in edges:
@@ -127,7 +128,7 @@ def build_model(N):
             for i in range(len(neighbors)):
                 for j in range(i + 1, len(neighbors)):
                     model.AddForbiddenAssignments(
-                        [grid[u], grid[neighbors[i]], grid[neighbors[j]]],
+                        [grid[neighbors[i]], grid[u], grid[neighbors[j]]],
                         forbidden_triplets
                     )
 
