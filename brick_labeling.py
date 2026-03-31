@@ -3,10 +3,10 @@ import time
 from collections import deque
 
 # --- CONFIGURATION ---
-GRID_SIZE = 24         # Must be a multiple of BRICK_LENGTH
-MAX_COL_NUMBER = 22    # The ceiling for our search # 18 works for 24x24 grid, brick length 6
+GRID_SIZE = 32         # Must be a multiple of BRICK_LENGTH
+MAX_COL_NUMBER = 31    # The ceiling for our search # 18 works for 24x24 grid, brick length 6
 
-BRICK_LENGTH = 6  # (ideally even) length of bricks
+BRICK_LENGTH = 4  # (ideally even) length of bricks
 
 # ENFORCE RESTRICTIONS
 PACKING = True
@@ -18,7 +18,7 @@ IDENTICAL_NEIGHBORS = True
 # SEARCH CONFIG
 NUM_SEARCH_WORKERS = 8
 MAX_MEMORY_IN_MB = 4000
-MAX_TIME_IN_MINUTES = 600
+MAX_TIME_IN_MINUTES = 60 * 6
 LOG_SEARCH = True
 RANDOM_SEARCH_SEED = 42
 
@@ -122,19 +122,21 @@ def build_model(N):
 
     print(" > Applying Local Rules...")
     # --- 3. PRE-CALCULATE TABLES ---
-    forbidden_pairs = []
-    for x in range(1, MAX_COL_NUMBER + 1):
-        for y in range(1, MAX_COL_NUMBER + 1):
-            if (IDENTICAL_NEIGHBORS and x == y) or (DOUBLES and (x == 2 * y or y == 2 * x)):
-                forbidden_pairs.append((x, y))
+    forbidden_pairs = [(x, x) for x in range(1, MAX_COL_NUMBER + 1)] if IDENTICAL_NEIGHBORS else []
+    if DOUBLES:
+        for x in range(1, MAX_COL_NUMBER + 1):
+            if 2 * x <= MAX_COL_NUMBER:
+                forbidden_pairs.append((x, 2 * x))
+                forbidden_pairs.append((2 * x, x))
 
     forbidden_triplets = []
     if STAIRS:
         for x in range(1, MAX_COL_NUMBER + 1):
-            for y in range(1, MAX_COL_NUMBER + 1):
-                for z in range(1, MAX_COL_NUMBER + 1):
-                    if 2 * x == y + z:
-                        forbidden_triplets.append((x, y, z))
+            for y in range(x + 1, MAX_COL_NUMBER + 1):
+                z = 2 * y - x
+                if z <= MAX_COL_NUMBER:
+                    forbidden_triplets.append((x, y, z))
+                    forbidden_triplets.append((z, y, x))
 
     # --- 4. APPLY EDGE RULES ---
     for u, v in edges:
@@ -149,12 +151,15 @@ def build_model(N):
             for i in range(len(neighbor_nodes)):
                 for j in range(i + 1, len(neighbor_nodes)):
                     model.AddForbiddenAssignments(
-                        [grid[u], grid[neighbor_nodes[i]], grid[neighbor_nodes[j]]],
+                        [grid[neighbor_nodes[i]], grid[u], grid[neighbor_nodes[j]]],
                         forbidden_triplets
                     )
 
         if SANDWICHES and len(neighbor_vars) > 1:
             model.AddAllDifferent(neighbor_vars)
+
+    # --- MANUAL SYMMETRY BREAKING ---
+    #model.Add(grid[0, 0] == 1)
 
     # --- 6. SEARCH STRATEGY ---
     # This helps the solver decide which cells to fill first
