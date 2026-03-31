@@ -4,7 +4,7 @@ from collections import deque
 
 # --- CONFIGURATION ---
 GRID_SIZE = 24         # Must be a multiple of BRICK_LENGTH
-MAX_COL_NUMBER = 18    # The ceiling for our search # 18 works for 24x24 grid, brick length 6
+MAX_COL_NUMBER = 22    # The ceiling for our search # 18 works for 24x24 grid, brick length 6
 
 BRICK_LENGTH = 6  # (ideally even) length of bricks
 
@@ -59,7 +59,7 @@ def compute_distances_and_edges(N):
                 seen_edges.add(edge)
 
     # 3. Compute Exact Shortest Paths using BFS
-    dist_cap = MAX_COL_NUMBER
+    dist_cap = MAX_COL_NUMBER // 2
     distances = {}
     for r in range(N):
         for c in range(N):
@@ -83,24 +83,45 @@ def build_model(N):
     
     adj, edges, distances = compute_distances_and_edges(N)
     
-    grid = {}
-    for r in range(N):
-        for c in range(N):
-            grid[r, c] = model.NewIntVar(1, MAX_COL_NUMBER, f'grid_{r}_{c}')
+    grid = { (r, c): model.NewIntVar(1, MAX_COL_NUMBER, f'g_{r}_{c}') for r in range(N) for c in range(N) }
 
-    # --- 1. PACKING RESTRICTIONS ---
-    if PACKING:
-        print(" > Applying Packing (Distance = Z)...")
+    # --- 1. PACKING INDICATORS (Crucial for Clique Model) ---
+    # is_val[(r,c), z] is true if grid[r,c] == z
+    is_val = {}
+    for (r, c) in grid.keys():
         for z in range(1, MAX_COL_NUMBER + 1):
-            k = z
+            is_val[(r, c), z] = model.NewBoolVar(f'is_{r}_{c}_{z}')
+            model.Add(grid[r, c] == z).OnlyEnforceIf(is_val[(r, c), z])
+            model.Add(grid[r, c] != z).OnlyEnforceIf(is_val[(r, c), z].Not())
+
+    # --- 2. BALL-BASED PACKING (Maximal Cliques) ---
+    if PACKING:
+        print("  > Constructing Geometric Cliques...")
+        for z in range(1, MAX_COL_NUMBER + 1):
+            k = z // 2
             
-            for u, targets in distances.items():
-                for v, dist in targets.items():
-                    if 0 < dist <= k and u < v:
-                        model.AddForbiddenAssignments([grid[u], grid[v]], [(z, z)])
+            if z % 2 == 0:
+                # Even z: Any two nodes in a ball of radius k are at distance <= 2k
+                for center, targets in distances.items():
+                    clique = [is_val[node, z] for node, d in targets.items() if d <= k]
+                    if len(clique) > 1:
+                        model.AddAtMostOne(clique)
+            else:
+                # Odd z: Any two nodes in the union of balls of radius k 
+                # around an edge (u, v) are at distance <= 2k + 1
+                for u, v in edges:
+                    clique_nodes = set()
+                    for node, d in distances[u].items():
+                        if d <= k: clique_nodes.add(node)
+                    for node, d in distances[v].items():
+                        if d <= k: clique_nodes.add(node)
+                    
+                    clique = [is_val[node, z] for node in clique_nodes]
+                    if len(clique) > 1:
+                        model.AddAtMostOne(clique)
 
     print(" > Applying Local Rules...")
-    # --- 2. PRE-CALCULATE TABLES ---
+    # --- 3. PRE-CALCULATE TABLES ---
     forbidden_pairs = []
     for x in range(1, MAX_COL_NUMBER + 1):
         for y in range(1, MAX_COL_NUMBER + 1):
@@ -115,11 +136,11 @@ def build_model(N):
                     if 2 * x == y + z:
                         forbidden_triplets.append((x, y, z))
 
-    # --- 3. APPLY EDGE RULES ---
+    # --- 4. APPLY EDGE RULES ---
     for u, v in edges:
         model.AddForbiddenAssignments([grid[u], grid[v]], forbidden_pairs)
 
-    # --- 4. APPLY NODE-CENTRIC RULES ---
+    # --- 5. APPLY NODE-CENTRIC RULES ---
     for u, u_neighbors in adj.items():
         neighbor_nodes = list(u_neighbors)
         neighbor_vars = [grid[n] for n in u_neighbors]
@@ -135,15 +156,11 @@ def build_model(N):
         if SANDWICHES and len(neighbor_vars) > 1:
             model.AddAllDifferent(neighbor_vars)
 
-    # --- 5. SEARCH STRATEGY ---
+    # --- 6. SEARCH STRATEGY ---
     # This helps the solver decide which cells to fill first
     all_vars = [grid[r, c] for r in range(N) for c in range(N)]
     model.AddDecisionStrategy(all_vars, cp_model.CHOOSE_FIRST, cp_model.SELECT_MIN_VALUE)
 
-    # OBJECTIVE: Minimize the maximum number used
-    #model.Minimize(max_val)
-    
-    #return model, grid, max_val
     return model, grid
 
 def solve():
@@ -151,7 +168,6 @@ def solve():
         print("ERROR: GRID_SIZE must be a multiple of BRICK_LENGTH.")
         return
 
-    #model, grid, max_val = build_model(GRID_SIZE)
     model, grid = build_model(GRID_SIZE)
     solver = cp_model.CpSolver()
     solver.parameters.num_search_workers = NUM_SEARCH_WORKERS
@@ -176,7 +192,6 @@ def solve():
 
     if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
         print(f"\nSUCCESS: Solution Found for {GRID_SIZE}x{GRID_SIZE} {BRICK_LENGTH}-Edge Brick Grid in {elapsed:.2f}s!")
-        #print(f"\nMax number used: {solver.Value(max_val)}")
         for r in range(GRID_SIZE):
             # Print the horizontal row
             row_str = ""
