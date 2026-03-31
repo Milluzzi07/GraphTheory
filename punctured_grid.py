@@ -82,13 +82,23 @@ def build_model(N):
     adj, edges, distances = compute_distances_and_edges(N)
     grid = { (r, c): model.NewIntVar(1, MAX_COL_NUMBER, f'g_{r}_{c}') for r, c in adj.keys() }
 
+    # is_val[u, z] is True if grid[u] == z, False otherwise.
+    is_val = {}
+    for u in grid.keys():
+        for z in range(1, MAX_COL_NUMBER + 1):
+            is_val[u, z] = model.NewBoolVar(f'is_{u}_{z}')
+            # Link the boolean to the integer variable
+            model.Add(grid[u] == z).OnlyEnforceIf(is_val[u, z])
+            model.Add(grid[u] != z).OnlyEnforceIf(is_val[u, z].Not())
+
     # 1. PACKING
     if PACKING:
         for z in range(1, MAX_COL_NUMBER + 1):
             for u, targets in distances.items():
                 for v, dist in targets.items():
                     if 0 < dist <= z and u < v:
-                        model.AddForbiddenAssignments([grid[u], grid[v]], [(z, z)])
+                        # Enforce that u and v cannot BOTH be z using boolean logic.
+                        model.AddAtMostOne([is_val[u, z], is_val[v, z]])
 
     # 2. TABLES
     forbidden_pairs = [(x, x) for x in range(1, MAX_COL_NUMBER + 1)] if IDENTICAL_NEIGHBORS else []
@@ -130,10 +140,13 @@ def solve():
     solver.parameters.num_search_workers = 8
     solver.parameters.log_search_progress = LOG_SEARCH
 
+    print("\nSolving...")
+    start_time = time.time()
     status = solver.Solve(model)
+    elapsed = time.time() - start_time
 
     if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-        print(f"\nSolution Found for {PUNCH_SIZE}x{PUNCH_SIZE} blocks:\n")
+        print(f"\nSolution Found for {PUNCH_SIZE}x{PUNCH_SIZE} blocks in {elapsed:.2f}s:\n")
         for r in range(GRID_SIZE):
             row_str = ""
             for c in range(GRID_SIZE):
