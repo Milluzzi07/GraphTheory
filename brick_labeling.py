@@ -3,10 +3,12 @@ import time
 from collections import deque
 
 # --- CONFIGURATION ---
-GRID_SIZE = 32         # Must be a multiple of BRICK_LENGTH
-MAX_COL_NUMBER = 31    # The ceiling for our search # 18 works for 24x24 grid, brick length 6
+GRID_SIZE = 24         # Must be a multiple of BRICK_LENGTH
+MAX_COL_NUMBER = 14    # The ceiling for our search # 15 works for 24x24 grid, brick length 6, tok ~15 min
 
-BRICK_LENGTH = 4  # (ideally even) length of bricks
+BRICK_LENGTH = 6  # (ideally even) length of bricks
+
+FORCE_0_0_TO_1 = False  # Forces (0, 0) to be 1 to break symmetry. Speeds up pre-solve and solve. Good for large grids and you just want any solution.
 
 # ENFORCE RESTRICTIONS
 PACKING = True
@@ -18,7 +20,7 @@ IDENTICAL_NEIGHBORS = True
 # SEARCH CONFIG
 NUM_SEARCH_WORKERS = 8
 MAX_MEMORY_IN_MB = 4000
-MAX_TIME_IN_MINUTES = 60 * 6
+MAX_TIME_IN_MINUTES = 60 * 12
 LOG_SEARCH = True
 RANDOM_SEARCH_SEED = 42
 
@@ -159,12 +161,18 @@ def build_model(N):
             model.AddAllDifferent(neighbor_vars)
 
     # --- MANUAL SYMMETRY BREAKING ---
-    #model.Add(grid[0, 0] == 1)
+    if FORCE_0_0_TO_1:
+        model.Add(grid[0, 0] == 1)
 
     # --- 6. SEARCH STRATEGY ---
     # This helps the solver decide which cells to fill first
     all_vars = [grid[r, c] for r in range(N) for c in range(N)]
-    model.AddDecisionStrategy(all_vars, cp_model.CHOOSE_FIRST, cp_model.SELECT_MIN_VALUE)
+    #model.AddDecisionStrategy(all_vars, cp_model.CHOOSE_FIRST, cp_model.SELECT_MIN_VALUE)
+    model.AddDecisionStrategy(
+        all_vars, 
+        cp_model.CHOOSE_MIN_DOMAIN_SIZE, 
+        cp_model.SELECT_MIN_VALUE
+    )
 
     return model, grid
 
@@ -181,7 +189,7 @@ def solve():
     solver.parameters.log_search_progress = LOG_SEARCH
     
     # 1. Use a fixed search strategy instead of the default automated portfolio
-    solver.parameters.search_branching = cp_model.FIXED_SEARCH 
+    #solver.parameters.search_branching = cp_model.FIXED_SEARCH
 
     # 2. Increase the level of "presolve" to catch contradictions early
     solver.parameters.cp_model_presolve = True
