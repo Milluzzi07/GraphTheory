@@ -4,10 +4,11 @@ from ortools.sat.python import cp_model
 import time
 
 # --- CONFIGURATION ---
-MIN_WIDTH: int = 200
-MAX_WIDTH: int = 200
-MAX_COLOR: int = 11
-HEIGHT: int = 3
+MIN_WIDTH: int = 30
+MAX_WIDTH: int = 30
+MAX_COLOR: int = 17
+NUM_FEET: int = 3
+HEIGHT: int = NUM_FEET + 1
 TIME_LIMIT: int = 1800
 CPU_THREADS_USED: int = 16 #Set to 0 to use all available cores
 MAX_MEMORY_IN_MB: int = 0 #Set to 0 to use all available memory
@@ -32,28 +33,26 @@ def generate_constraints_for_chunk(chunk_rows, width, HEIGHT, max_color, is_fini
             curr_idx = get_flat_idx(r, c, width)
             
             # --- 2. ADJACENCY & ARITHMETIC ---
-            # Determine immediate neighbors based on caterpillar topology
+            # Determine immediate neighbors based on n-feet caterpillar topology
             immediate_neighbors = []
             
-            if r == 1:
-                # Center row (row 1) connects to horizontally adjacent nodes (cylindrical or finite),
-                # and up to row 0, down to row 2
+            if r == 0:
+                # Spine row (r=0) connects horizontally to other spine nodes 
                 if is_finite:
                     if c - 1 >= 0:
-                        immediate_neighbors.append(get_flat_idx(1, c - 1, width)) # Left
+                        immediate_neighbors.append(get_flat_idx(0, c - 1, width)) # Left spine
                     if c + 1 < width:
-                        immediate_neighbors.append(get_flat_idx(1, c + 1, width)) # Right
+                        immediate_neighbors.append(get_flat_idx(0, c + 1, width)) # Right spine
                 else:
-                    immediate_neighbors.append(get_flat_idx(1, (c - 1) % width, width)) # Left
-                    immediate_neighbors.append(get_flat_idx(1, (c + 1) % width, width)) # Right
-                immediate_neighbors.append(get_flat_idx(0, c, width))               # Up
-                immediate_neighbors.append(get_flat_idx(2, c, width))               # Down
-            elif r == 0:
-                # Top row (row 0) only connects down to center row (row 1) 
-                immediate_neighbors.append(get_flat_idx(1, c, width))               
-            elif r == 2:
-                # Bottom row (row 2) only connects up to center row (row 1)
-                immediate_neighbors.append(get_flat_idx(1, c, width))               
+                    immediate_neighbors.append(get_flat_idx(0, (c - 1) % width, width)) # Left spine
+                    immediate_neighbors.append(get_flat_idx(0, (c + 1) % width, width)) # Right spine
+                
+                # Connects to all feet on the same column
+                for f in range(1, NUM_FEET + 1):
+                    immediate_neighbors.append(get_flat_idx(f, c, width))               # Foot
+            else:
+                # Foot row only connects to the spine node in the same column
+                immediate_neighbors.append(get_flat_idx(0, c, width))               
                 
             for n_idx in immediate_neighbors:
                 # Deduplication for Adjacency (A != B, etc)
@@ -61,23 +60,19 @@ def generate_constraints_for_chunk(chunk_rows, width, HEIGHT, max_color, is_fini
                     adjacency_packets.append((curr_idx, n_idx))
             
             # Arithmetic (2*A != B + C)
-            # We need all pairs of neighbors for the current cell
             for i in range(len(immediate_neighbors)):
                 for j in range(i + 1, len(immediate_neighbors)):
                     n1 = immediate_neighbors[i]
                     n2 = immediate_neighbors[j]
-                    # No deduplication needed here because 'current' is the pivot
                     arithmetic_packets.append((curr_idx, n1, n2))
 
     return (adjacency_packets, arithmetic_packets)
 
-def solve_caterpillar_sat_parallel(width, max_color, time_limit, is_finite):
+def solve_nfeet_caterpillar_sat_parallel(width, max_color, time_limit, is_finite):
     model = cp_model.CpModel()
     start_time = time.time()
-    # max_color = min(max_color, width - 1)
     
     # 1. CREATE VARIABLES (Main Thread)
-    # Using a flat list for faster indexing by workers
     flat_vars: list[cp_model.IntVar] = []
     b_is_z = {}
     for r in range(HEIGHT):
@@ -100,10 +95,8 @@ def solve_caterpillar_sat_parallel(width, max_color, time_limit, is_finite):
             grid[r, c] = flat_vars[get_flat_idx(r, c, width)]
 
     # 2. PARALLEL GENERATION
-    # Split rows among workers
     num_cores = multiprocessing.cpu_count()
     rows = list(range(HEIGHT))
-    # Simple chunking
     chunk_size = max(1, len(rows) // num_cores)
     row_chunks = [rows[i:i + chunk_size] for i in range(0, len(rows), chunk_size)]
     
@@ -116,39 +109,37 @@ def solve_caterpillar_sat_parallel(width, max_color, time_limit, is_finite):
         for future in futures:
             adj_pack, arith_pack = future.result()
             
-            # 3. APPLY CONSTRAINTS (Main Thread)
-            
-            # A. Adjacency
+            # 3. APPLY CONSTRAINTS
             for idx1, idx2 in adj_pack:
                 u, v = flat_vars[idx1], flat_vars[idx2]
                 model.Add(u != v)
                 model.Add(u != 2 * v)
                 model.Add(v != 2 * u)
 
-            # C. Arithmetic
             for idx_c, idx_n1, idx_n2 in arith_pack:
                 current = flat_vars[idx_c]
                 n1 = flat_vars[idx_n1]
                 n2 = flat_vars[idx_n2]
-                # 2*Current != n1 + n2  =>  2*Current - n1 - n2 != 0
                 model.Add(2 * current - n1 - n2 != 0)
 
     # 3.5 APPLY MAXIMAL CLIQUES & SELF-INTERFERENCE
     print(f"\nGenerating maximal cliques...", end=" ")
     clique_time = time.time()
     
-    # Self-interference
     if not is_finite:
         for z in range(1, max_color + 1):
             req_dist = 2 if z == 1 else z
             for nr in range(HEIGHT):
-                cycle_dist = width + 2 * abs(nr - 1)
+                # dist from node to itself around cycle:
+                # spine: width
+                # Foot: width + 2
+                cycle_dist = width + (0 if nr == 0 else 2)
                 if req_dist >= cycle_dist:
                     for nc in range(width):
                         model.Add(b_is_z[nr, nc, z] == 0)
 
     # Maximal Cliques (Packing)
-    spine_r = 1
+    spine_r = 0
     for z in range(1, max_color + 1):
         req_dist = 2 if z == 1 else z
         k = req_dist // 2
@@ -167,7 +158,9 @@ def solve_caterpillar_sat_parallel(width, max_color, time_limit, is_finite):
                         dx1 = abs(nc - c)
                     else:
                         dx1 = min(abs(nc - c), width - abs(nc - c))
-                    dist1 = dx1 + abs(nr - spine_r)
+                    
+                    dist_to_spine_nr = 1 if nr > 0 else 0
+                    dist1 = dx1 + dist_to_spine_nr
                     
                     if is_even:
                         if dist1 <= k:
@@ -177,7 +170,7 @@ def solve_caterpillar_sat_parallel(width, max_color, time_limit, is_finite):
                             dx2 = abs(nc - c_next)
                         else:
                             dx2 = min(abs(nc - c_next), width - abs(nc - c_next))
-                        dist2 = dx2 + abs(nr - spine_r)
+                        dist2 = dx2 + dist_to_spine_nr
                         
                         if min(dist1, dist2) <= k:
                             clique.append(b_is_z[nr, nc, z])
@@ -187,9 +180,11 @@ def solve_caterpillar_sat_parallel(width, max_color, time_limit, is_finite):
     print(f"done in {time.time() - clique_time:.2f}s")
     
     # 3.6 SYMMETRY BREAKING
-    # Force top row strictly greater than bottom row to break symmetry and halve search space
-    for c in range(width):
-        model.Add(grid[0, c] > grid[2, c])
+    # Force foot 1 < foot 2 < ... < foot N locally on each spine node vertically to break permutations
+    if NUM_FEET > 1:
+        for c in range(width):
+            for f in range(1, NUM_FEET):
+                model.Add(grid[f, c] < grid[f + 1, c])
         
     gen_time = time.time() - start_time
     print(f"Total generation done in {gen_time:.2f}s")
@@ -209,13 +204,13 @@ def solve_caterpillar_sat_parallel(width, max_color, time_limit, is_finite):
 
 def main():
     print(f"--- STARTING SEARCH ---")
-    print(f"Height: {HEIGHT}")
-    print(f"Width Range: {MIN_WIDTH} - {MAX_WIDTH}")
+    print(f"Spine length (Width): {MIN_WIDTH} - {MAX_WIDTH}")
+    print(f"Feet per spine node:  {NUM_FEET}")
     print("-" * 30)
 
     for w in range(MIN_WIDTH, MAX_WIDTH + 1):
         print(f"Testing Width {w}...", end=" ", flush=True)
-        result_status, solver, grid = solve_caterpillar_sat_parallel(w, MAX_COLOR, TIME_LIMIT, IS_FINITE)
+        result_status, solver, grid = solve_nfeet_caterpillar_sat_parallel(w, MAX_COLOR, TIME_LIMIT, IS_FINITE)
         
         if result_status == cp_model.OPTIMAL or result_status == cp_model.FEASIBLE:
             print(f"SUCCESS!")

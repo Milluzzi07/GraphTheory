@@ -4,8 +4,8 @@ import itertools
 
 #GRAPH CONFIG
 #Base Graph
-GRID_SIZE = 15 #The width and height of your graph
-MAX_COL_NUMBER = 80 #This is the max coloring number which can be used in a graph. Note: On torodorial this is a max of GRID_SIZE-1
+GRID_SIZE = 17 #The width and height of your graph
+MAX_COL_NUMBER = 100 #This is the max coloring number which can be used in a graph. Note: On torodorial this is a max of GRID_SIZE-1
 TORODORIAL=False #Want to find something infinite?
 LOWEST_NUMBER=False #Instead of aiming for a single solution, this will aim for the lowest MAX coloring number solution. This will most likely use up all the time you give it.
 #ENFORCE ____ RESTRICTIONS

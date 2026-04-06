@@ -4,13 +4,13 @@ import itertools
 
 #GRAPH CONFIG
 #Base Graph
-GRID_SIZE = 30 #The width and height of your graph
-MAX_COL_NUMBER = 20 #This is the max coloring number which can be used in a graph. Note: On torodorial this is a max of GRID_SIZE-1
-TORODORIAL=True #Want to find something infinite?
+GRID_SIZE = 11 #The width and height of your graph
+MAX_COL_NUMBER = 22 #This is the max coloring number which can be used in a graph. Note: On torodorial this is a max of GRID_SIZE-1
+TORODORIAL=False #Want to find something infinite?
 LOWEST_NUMBER=False #Instead of aiming for a single solution, this will aim for the lowest MAX coloring number solution. This will most likely use up all the time you give it.
 #ENFORCE ____ RESTRICTIONS
 PACKING=True #Enforces Packing Contraints(5 must be more than 5 away from another 5)
-DOUBLES=False #Restricts doubling a--2a
+DOUBLES=True #Restricts doubling a--2a
 SANDWICHES=False #Restricts Sandwiches a--b--a
 STAIRS=False #Restrict staircases a--a+b--a+2b
 IDENTICAL_NEIGHBORS=False #Restricts Identical Neighbors a--a(Only actually does something if packing is disabled)
@@ -111,7 +111,9 @@ def solve_infinite():
 
     #PERFORMANCE STUFF
     if LOWEST_NUMBER:
-        print("not yet set up to find lowest number")
+        max_c = model.NewIntVar(1, MAX_COL_NUMBER, 'max_c')
+        model.AddMaxEquality(max_c, [grid[r, c] for r in range(GRID_SIZE) for c in range(GRID_SIZE)])
+        model.Minimize(max_c)
     else:
         #This will force the MAX Col Number to be placed. and then will automatically stop every other square from being it.
         model.Add(grid[0,0] == MAX_COL_NUMBER)
@@ -179,6 +181,10 @@ def solve_finite():
             if z % 10 == 0 or z == MAX_COL_NUMBER:
                 print(f"    ... processing color {z}/{MAX_COL_NUMBER}")
                 
+            if z >= 2 * GRID_SIZE - 2:
+                model.AddAtMostOne([b_is_z[r, c, z] for r in range(GRID_SIZE) for c in range(GRID_SIZE)])
+                continue
+
             shape1_offsets = []
             shape2_offsets = []
             for u in range(0, z + 1):
@@ -243,6 +249,11 @@ def solve_finite():
                         model.Add(2 * current != valid_neighbors[i] + valid_neighbors[j])
             if SANDWICHES and len(valid_neighbors) > 1:
                 model.AddAllDifferent(valid_neighbors)
+
+    if LOWEST_NUMBER:
+        max_c = model.NewIntVar(1, MAX_COL_NUMBER, 'max_c')
+        model.AddMaxEquality(max_c, [grid[r, c] for r in range(GRID_SIZE) for c in range(GRID_SIZE)])
+        model.Minimize(max_c)
 
     # ---------------------------------------------------------
     # SOLVE

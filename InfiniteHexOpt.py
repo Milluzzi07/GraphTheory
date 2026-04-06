@@ -4,19 +4,20 @@ from collections import deque
 import itertools
 
 # --- CONFIGURATION ---
-GRID_SIZE = 16 # The width and height of your graph (must be even for Toroidal Hex graphs)
+GRID_SIZE = 35 # The width and height of your graph (must be even for Toroidal Hex graphs)
 MAX_COL_NUMBER = 40 # Max coloring number to attempt
 TOROIDAL = False # Select Infinite (Toroidal) or Finite Hex Grid
+LOWEST_NUMBER = False # Search for the lowest possible max coloring number
 
 # ENFORCE ____ RESTRICTIONS
 PACKING = True # Enforces Packing Constraints: Node 5 must be >5 distance from another 5
-DOUBLES = True # Restricts doubling: a -- 2a
-SANDWICHES = True # Restricts Sandwiches: a -- b -- a
-STAIRS = True # Restricts staircases: a -- a+b -- a+2b
+DOUBLES = False # Restricts doubling: a -- 2a
+SANDWICHES = True# Restricts Sandwiches: a -- b -- a
+STAIRS = False# Restricts staircases: a -- a+b -- a+2b
 IDENTICAL_NEIGHBORS = False # Restricts a -- a (Redundant if Packing is enabled)
 
 # SEARCH CONFIG
-NUM_SEARCH_WORKERS = 12 # Threads to use (0 will use all)
+NUM_SEARCH_WORKERS = 8 # Threads to use (0 will use all)
 MAX_MEMORY_IN_MB = 16000 # Max memory for solver
 MAX_TIME_IN_MINUTES = 600
 LOG_SEARCH = True
@@ -107,9 +108,19 @@ def build_model(N, toroidal):
     # 2. PACKING CONSTRAINTS
     if PACKING:
         print("  > Pre-computing BFS-based Maximal Cliques for Packing Constraints...")
+        
+        max_dist_in_grid = 0
+        for start_node, dists in distances.items():
+            if dists:
+                max_dist_in_grid = max(max_dist_in_grid, max(dists.values()))
+                
         for z in range(1, MAX_COL_NUMBER + 1):
             if z % 10 == 0 or z == MAX_COL_NUMBER:
                 print(f"    ... processing color {z}/{MAX_COL_NUMBER}")
+            
+            if not toroidal and z >= max_dist_in_grid:
+                model.AddAtMostOne([b_is_z[r, c, z] for r in range(N) for c in range(N)])
+                continue
             
             k = z // 2
             
@@ -170,8 +181,13 @@ def build_model(N, toroidal):
     # If the grid is Toroidal, it is vertex-transitive, meaning any valid solution can be 
     # freely translated. We force the max color to the center to instantly break symmetry.
     # Note: We do NOT do this for Finite grids as they have boundaries.
-    if toroidal:
+    if toroidal and not LOWEST_NUMBER:
         model.Add(grid[N//2, N//2] == MAX_COL_NUMBER)
+
+    if LOWEST_NUMBER:
+        max_c = model.NewIntVar(1, MAX_COL_NUMBER, 'max_c')
+        model.AddMaxEquality(max_c, [grid[r, c] for r in range(N) for c in range(N)])
+        model.Minimize(max_c)
 
     load_time = time.time() - start_time
     print(f"  > Constraints generated in {load_time:.2f} seconds.")
