@@ -4,15 +4,15 @@ from ortools.sat.python import cp_model
 import time
 
 # --- CONFIGURATION ---
-MIN_WIDTH: int = 30
-MAX_WIDTH: int = 30
-MAX_COLOR: int = 17
-NUM_FEET: int = 3
+MIN_WIDTH: int = 226
+MAX_WIDTH: int = 226
+MAX_COLOR: int = 225
+NUM_FEET: int = 5
 HEIGHT: int = NUM_FEET + 1
 TIME_LIMIT: int = 1800
 CPU_THREADS_USED: int = 16 #Set to 0 to use all available cores
 MAX_MEMORY_IN_MB: int = 0 #Set to 0 to use all available memory
-IS_FINITE: bool = True # Set to True for open boundaries, False for cylindrical
+IS_FINITE: bool =  False # Set to True for open boundaries, False for cylindrical
 
 def get_flat_idx(r, c, width):
     return r * width + c
